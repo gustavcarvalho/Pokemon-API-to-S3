@@ -1,4 +1,5 @@
-import requests
+from aiohttp import ClientSession
+from asyncio import gather, run
 
 def extract_species_names(data):
     names = list()
@@ -12,63 +13,74 @@ def extract_species_names(data):
                 species_data = evolution['species']
                 if 'name' in species_data:
                     names.append(species_data['name'])
-            names.extend(extract_species_names(evolution))
+                names.extend(extract_species_names(evolution))
             
-    names = list(dict.fromkeys(names))
-    return names
-
-def pokemon_weakness(pokemon_types, base_url):
+    return list(dict.fromkeys(names))
+    
+#['flying', 'poison', 'bug', 'fire', 'ice']
+async def pokemon_weakness(session: ClientSession, pokemon_types, base_url):
     weakness = list()
         
     for pokemon_type in pokemon_types:
-        type_weakness = requests.get(f'{base_url}type/{pokemon_type}').json()
-        type_weakness = type_weakness['damage_relations']['double_damage_from']
-        for type_weakness_values in type_weakness:
-            type_weakness_values['name']
-            weakness.append(type_weakness_values)
+        async with session.get(f'{base_url}type/{pokemon_type}') as response:
+            response = await response.json()
+            weakness = [x['name'] for x in response['damage_relations']['double_damage_from']]
+            # weakness.append(response['damage_relations']['double_damage_from'])
+            return weakness
     
-    return weakness
+async def pokemon_id_number(session: ClientSession, base_url):
+    async with session.get(f'{base_url}pokemon/') as response:
+        number_of_ids = await response.json()
+        return number_of_ids['count']
+
+async def fetch_pokemon_data(session: ClientSession, base_url, ids):
+    pokemon_data = dict()
+
+    async with session.get(f'{base_url}pokemon/{ids}') as response:
+        response = await response.json()
+        pokemon_id = response['id']
+        pokemon_name = response['name']
+        pokemon_types = [t['type']['name'] for t in response['types']]
+        pokemon_ability = response['abilities'][0]['ability']['name']
+
+    # Weakness function applied to "pokemon_types"
+    pokemon_types_weakness = await pokemon_weakness(session, pokemon_types, base_url)
+
+    # Cathing "pokemon-species" and "" endpoint informations
+    async with session.get(f'{base_url}pokemon-species/{ids}') as response:
+        pokemon_info_species = await response.json()
+        pokemon_generation = pokemon_info_species['generation']['name']
+        pokemon_pokedex_number = pokemon_info_species['pokedex_numbers'][0]['entry_number']
 
 
-def fetch_pokemon_data():
+    async with session.get(pokemon_info_species['evolution_chain']['url']) as response:
+        pokemon_info_evolution = await response.json()
+        pokemon_evolution_chain = extract_species_names(pokemon_info_evolution['chain'])
+    
+    pokemon_data[pokemon_id] = {'Pokedex Number': pokemon_pokedex_number, 'Name': pokemon_name, 'Type': pokemon_types, 'Weakness': pokemon_types_weakness, 'Ability': pokemon_ability, 'Generation': pokemon_generation,'Evolution Chain': pokemon_evolution_chain}
+
+    return pokemon_data
+
+
+async def main() -> None:
     pokemon_data = dict()
     base_url = 'https://pokeapi.co/api/v2/'
 
-    number_of_ids = requests.get(f'{base_url}pokemon/').json()
-    number_of_ids = number_of_ids['count']
+    async with ClientSession() as session:
+        pokemon_ids = await pokemon_id_number(session=session, base_url=base_url)
 
-    try:
-        for ids in range(1, number_of_ids + 1):
-            
-            # Cathing "pokemon" endpoint informations
-            pokemon_info = requests.get(f'{base_url}pokemon/{ids}').json()
-            pokemon_id = pokemon_info['id']
-            pokemon_name = pokemon_info['name']
-            pokemon_types = [t['type']['name'] for t in pokemon_info['types']]
-            pokemon_ability = pokemon_info['abilities'][0]['ability']['name']
-
-            # Weakness function applied to "pokemon_types"
-            pokemon_types_weakness = pokemon_weakness(pokemon_types, base_url)
-
-            # Cathing "pokemon-species" and "" endpoint informations
-            pokemon_info_species = requests.get(f'{base_url}pokemon-species/{ids}').json()
-            pokemon_generation = pokemon_info_species['generation']['name']
-            pokemon_pokedex_number = pokemon_info_species['pokedex_numbers'][0]['entry_number']
+        
+        tasks = [fetch_pokemon_data(session, base_url, ids) for ids in range(1, pokemon_ids - 277)]
+        responses = await gather(*tasks)
+        print(responses)
+        
 
 
-            pokemon_info_evolution = requests.get(pokemon_info_species['evolution_chain']['url']).json()
-            pokemon_evolution_chain = extract_species_names(pokemon_info_evolution['chain'])
-
-
-            
-
-            pokemon_data[pokemon_id] = {'Pokedex Number': pokemon_pokedex_number, 'Name': pokemon_name, 'Type': pokemon_types, 'Weakness': pokemon_types_weakness, 'Ability': pokemon_ability, 'Generation': pokemon_generation,'Evolution Chain': pokemon_evolution_chain}
-
-    except Exception as e:
-        print(f"Ocorreu um erro: {str(e)}")
-
-
-    print(pokemon_data)
+        print(pokemon_data)
 
 if __name__ == "__main__":
-    fetch_pokemon_data()
+    run(main())
+
+
+
+#
